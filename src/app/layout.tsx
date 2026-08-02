@@ -2,11 +2,11 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Uswa College Bhowana - AI Biology Tutor",
+  title: "ai-bio-teacher-uswa",
   description: "Official AI Biology Teaching System for Uswa College Bhowana developed by SM Tech",
   icons: {
-    icon: "/logo.jpg",
-    shortcut: "/logo.jpg",
+    icon: "/logo.jpeg",
+    shortcut: "/logo.jpeg",
     apple: "/logo.jpg",
   },
 };

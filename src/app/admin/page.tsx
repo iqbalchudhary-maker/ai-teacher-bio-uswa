@@ -1,365 +1,635 @@
-// src/app/admin/page.tsx
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
+import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
+import Image from "next/image";
 
-export default function AdminDashboard() {
-  // Authentication State
-  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
-  const [adminPasswordInput, setAdminPasswordInput] = useState("");
-  const [authError, setAuthError] = useState("");
+interface Message {
+  id?: string;
+  role: "user" | "assistant";
+  text: string;
+  imageUrl?: string;
+  translatedText?: string;
+  isTranslating?: boolean;
+}
 
-  // Tab State: 'students' | 'upload' | 'teacher'
-  const [activeTab, setActiveTab] = useState<"students" | "upload" | "teacher">("students");
+interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: string;
+}
 
-  // Form States
-  const [rollNumber, setRollNumber] = useState("");
-  const [name, setName] = useState("");
-  const [password, setPassword] = useState("");
-  const [subject, setSubject] = useState("Biology");
-  const [grade, setGrade] = useState("11th"); // First Year or Second Year
-  const [chapter, setChapter] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+export default function StudentDashboard() {
+  const router = useRouter();
 
-  const [studentMsg, setStudentMsg] = useState("");
-  const [uploadMsg, setUploadMsg] = useState("");
-  const [loadingStudent, setLoadingStudent] = useState(false);
-  const [loadingBook, setLoadingBook] = useState(false);
+  // 1. پاس ورڈ / لاگ ان پروٹیکشن سٹیٹ
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  // Default Admin Access Key
-  const ADMIN_SECRET_KEY = "admin123";
+  const [selectedSubject, setSelectedSubject] = useState("Biology");
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  
+  // Mobile Sidebar State
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  const handleAdminLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (adminPasswordInput === ADMIN_SECRET_KEY) {
-      setIsAdminAuthenticated(true);
-      setAuthError("");
+  // Student Identification
+  const [studentId, setStudentId] = useState("student_uswa_01");
+
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      role: "assistant",
+      text: "Welcome to Uswa College Bhowana! I am your AI Biology Professor. Which chapter or topic would you like to cover today?",
+    },
+  ]);
+  const [inputMessage, setInputMessage] = useState("");
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState<number | null>(null);
+  const [wasVoiceInput, setWasVoiceInput] = useState(false);
+
+  const recognitionRef = useRef<any>(null);
+  const isListeningRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // سیکیورٹی چیک: ڈائرैक्ट لنک اوپن ہونے سے روکنا
+  useEffect(() => {
+    const loggedIn = localStorage.getItem("isLoggedIn") || localStorage.getItem("token") || localStorage.getItem("session");
+    
+    if (!loggedIn) {
+      router.replace("/login");
     } else {
-      setAuthError("❌ Incorrect admin password!");
+      setIsAuthenticated(true);
     }
-  };
+  }, [router]);
 
-  // 1. Create Student Logic
-  const handleCreateStudent = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setStudentMsg("");
-    setLoadingStudent(true);
+  // 1. Fetching chat history for the logged-in student from Neon DB
+  useEffect(() => {
+    if (!isAuthenticated) return;
 
+    const fetchStudentSessions = async () => {
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "get_sessions",
+            studentId: studentId,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.sessions) {
+          setSessions(data.sessions);
+        }
+      } catch (err) {
+        console.error("Failed to load sessions from DB", err);
+      }
+    };
+
+    if (studentId) {
+      fetchStudentSessions();
+    }
+  }, [studentId, isAuthenticated]);
+
+  // 2. Loading messages for a previous session
+  const loadSession = async (session: ChatSession) => {
+    setCurrentSessionId(session.id);
+    setIsSidebarOpen(false);
     try {
-      const res = await fetch("/api/create-student", {
+      const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rollNumber, name, password }),
+        body: JSON.stringify({
+          action: "get_messages",
+          sessionId: session.id,
+        }),
       });
-
       const data = await res.json();
-      if (res.ok) {
-        setStudentMsg("✅ " + data.message);
-        setRollNumber("");
-        setName("");
-        setPassword("");
-      } else {
-        setStudentMsg("❌ " + (data.error || "Failed to register student"));
+      if (res.ok && data.messages) {
+        const loadedMsgs: Message[] = data.messages.map((m: any) => ({
+          role: m.role,
+          text: m.text,
+        }));
+        setMessages(loadedMsgs);
       }
     } catch (err) {
-      setStudentMsg("❌ Server connection error");
-    } finally {
-      setLoadingStudent(false);
+      console.error("Failed to load messages", err);
     }
   };
 
-  // 2. Upload Word (.docx) Book Logic
-  const handleUploadBook = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!file || !chapter) {
-      setUploadMsg("❌ Please provide file and book title");
+  const startNewChat = () => {
+    setCurrentSessionId(null);
+    setIsSidebarOpen(false);
+    setMessages([
+      {
+        role: "assistant",
+        text: `Welcome! I am your AI Biology Professor for ${selectedSubject}. Which chapter or topic would you like to start today?`,
+      },
+    ]);
+  };
+
+  // Speech Recognition Setup
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const SpeechRecognition =
+        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = "en-US";
+
+        recognition.onstart = () => {
+          setIsListening(true);
+          isListeningRef.current = true;
+        };
+
+        recognition.onresult = (event: any) => {
+          const transcript = event.results[0][0].transcript;
+          setInputMessage(transcript);
+          setIsListening(false);
+          isListeningRef.current = false;
+          setWasVoiceInput(true);
+        };
+
+        recognition.onerror = () => {
+          setIsListening(false);
+          isListeningRef.current = false;
+        };
+
+        recognition.onend = () => {
+          setIsListening(false);
+          isListeningRef.current = false;
+        };
+
+        recognitionRef.current = recognition;
+      }
+    }
+  }, []);
+
+  const toggleListening = () => {
+    if (!recognitionRef.current) {
+      alert("Please use Google Chrome for voice input support.");
       return;
     }
 
-    setUploadMsg("");
-    setLoadingBook(true);
+    try {
+      if (isListeningRef.current) {
+        recognitionRef.current.stop();
+        setIsListening(false);
+        isListeningRef.current = false;
+      } else {
+        recognitionRef.current.start();
+      }
+    } catch (err) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+      isListeningRef.current = false;
+    }
+  };
 
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("subject", subject);
-    formData.append("grade", grade);
-    formData.append("title", chapter);
+  const speakText = (text: string, index: number) => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+
+    window.speechSynthesis.cancel();
+
+    if (isSpeaking === index) {
+      setIsSpeaking(null);
+      return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    const hasUrdu = /[\u0600-\u06FF]/.test(text);
+    utterance.lang = hasUrdu ? "ur-PK" : "en-US";
+
+    utterance.onend = () => setIsSpeaking(null);
+    utterance.onerror = () => setIsSpeaking(null);
+
+    setIsSpeaking(index);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // Image Upload Handler
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSelectedImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Manual Translation Handler
+  const handleToggleTranslateMessage = async (index: number) => {
+    const targetMsg = messages[index];
+
+    if (targetMsg.translatedText) {
+      setMessages((prev) =>
+        prev.map((msg, i) =>
+          i === index ? { ...msg, translatedText: undefined } : msg
+        )
+      );
+      return;
+    }
+
+    setMessages((prev) =>
+      prev.map((msg, i) => (i === index ? { ...msg, isTranslating: true } : msg))
+    );
 
     try {
-      const res = await fetch("/api/upload-book", {
+      const res = await fetch("/api/chat", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: targetMsg.text,
+          action: "translate_to_urdu",
+        }),
+      });
+
+      const data = await res.json();
+      
+      if (res.ok) {
+        const finalUrduText = data.translation || data.reply || "";
+        
+        setMessages((prev) =>
+          prev.map((msg, i) =>
+            i === index
+              ? { ...msg, translatedText: finalUrduText, isTranslating: false }
+              : msg
+          )
+        );
+      } else {
+        setMessages((prev) =>
+          prev.map((msg, i) => (i === index ? { ...msg, isTranslating: false } : msg))
+        );
+      }
+    } catch (err) {
+      console.error("Translation failed", err);
+      setMessages((prev) =>
+        prev.map((msg, i) => (i === index ? { ...msg, isTranslating: false } : msg))
+      );
+    }
+  };
+
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if ((!inputMessage.trim() && !selectedImage) || loading) return;
+
+    const userText = inputMessage;
+    const userImage = selectedImage;
+    const isVoiceInputTurn = wasVoiceInput;
+
+    setInputMessage("");
+    setSelectedImage(null);
+    setWasVoiceInput(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+
+    const newMessages: Message[] = [...messages, { role: "user", text: userText || "[Uploaded Paper Image]", imageUrl: userImage || undefined }];
+    setMessages(newMessages);
+    setLoading(true);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: userText,
+          imageUrl: userImage,
+          subject: selectedSubject,
+          sessionId: currentSessionId,
+          studentId: studentId,
+        }),
       });
 
       const data = await res.json();
       if (res.ok) {
-        setUploadMsg("✅ " + data.message);
-        setChapter("");
-        setFile(null);
-      } else {
-        setUploadMsg("❌ " + (data.error || "Failed to upload book"));
+        const replyText = data.reply || data.text;
+        if (data.sessionId && !currentSessionId) {
+          setCurrentSessionId(data.sessionId);
+          setSessions((prev) => [
+            { id: data.sessionId, title: userText || "Paper Evaluation", createdAt: new Date().toLocaleDateString() },
+            ...prev,
+          ]);
+        }
+
+        const newAssistantIndex = newMessages.length;
+        const finalMessages: Message[] = [
+          ...newMessages,
+          { role: "assistant", text: replyText },
+        ];
+
+        setMessages(finalMessages);
+
+        if (isVoiceInputTurn) {
+          setTimeout(() => {
+            speakText(replyText, newAssistantIndex);
+          }, 300);
+        }
       }
     } catch (err) {
-      setUploadMsg("❌ Server connection error");
+      console.error(err);
     } finally {
-      setLoadingBook(false);
+      setLoading(false);
     }
   };
 
-  // IF NOT AUTHENTICATED: Show Login Screen
-  if (!isAdminAuthenticated) {
+  const handleLogout = () => {
+    localStorage.removeItem("isLoggedIn");
+    localStorage.removeItem("token");
+    localStorage.removeItem("session");
+    router.push("/login");
+  };
+
+  // اگر ابھی تصدیق نہیں ہوئی تو لوڈنگ اسکرین دکھائیں تاکہ ڈیش بورڈ نظر نہ آئے
+  if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-md w-full max-w-md border border-gray-200">
-          <div className="text-center mb-6">
-            <h1 className="text-xl font-bold text-gray-800">Admin Login (AI Biology Teacher)</h1>
-            <p className="text-xs text-gray-500 mt-1">Uswa College Bhowana</p>
-          </div>
-
-          <form onSubmit={handleAdminLogin} className="space-y-4">
-            <div>
-              <label className="text-xs font-semibold text-gray-700 block mb-1">
-                Admin Password (Admin Key)
-              </label>
-              <input
-                type="password"
-                placeholder="Enter password"
-                value={adminPasswordInput}
-                onChange={(e) => setAdminPasswordInput(e.target.value)}
-                className="w-full p-3 text-sm border rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-blue-600"
-                required
-              />
-            </div>
-
-            {authError && (
-              <p className="text-xs text-red-500 text-center font-bold">{authError}</p>
-            )}
-
-            <button
-              type="submit"
-              className="w-full bg-blue-900 hover:bg-blue-800 text-white font-bold py-3 text-sm rounded-xl transition shadow"
-            >
-              Access Admin Portal
-            </button>
-          </form>
+      <div className="flex h-dvh w-screen items-center justify-center bg-slate-900 text-white">
+        <div className="text-center space-y-2">
+          <div className="animate-spin text-2xl">⏳</div>
+          <p className="text-xs font-semibold text-slate-400">سیکیورٹی چیک جاری ہے...</p>
         </div>
       </div>
     );
   }
 
-  // IF AUTHENTICATED: Show Admin Control Panel
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-4xl mx-auto space-y-6">
-        {/* Header */}
-        <header className="bg-blue-900 text-white p-6 rounded-2xl shadow flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h1 className="text-lg font-bold">Uswa College Bhowana - Admin Control Panel</h1>
-            <p className="text-xs text-blue-200 mt-0.5">Director: Asad Raza Qazi | Principal: Ghulam Abbas Bhatti</p>
-          </div>
-          <button
-            onClick={() => setIsAdminAuthenticated(false)}
-            className="bg-red-500 hover:bg-red-600 text-white text-xs px-4 py-2 rounded-lg font-bold transition"
-          >
-            Logout
-          </button>
-        </header>
+    <div className="flex h-dvh w-screen bg-slate-100 text-left overflow-hidden" dir="ltr">
+      {/* MOBILE OVERLAY */}
+      {isSidebarOpen && (
+        <div 
+          onClick={() => setIsSidebarOpen(false)}
+          className="fixed inset-0 bg-black/60 z-30 md:hidden backdrop-blur-sm"
+        />
+      )}
 
-        {/* 3 Navigation Tabs */}
-        <div className="flex border-b border-gray-200 bg-white rounded-xl p-1.5 shadow-xs gap-2">
+      {/* LEFT SIDEBAR FOR CHAT HISTORY */}
+      <aside className={`
+        fixed md:static inset-y-0 left-0 z-40
+        w-72 bg-slate-900 text-white flex flex-col border-r border-slate-800 shrink-0
+        transform transition-transform duration-300 ease-in-out
+        ${isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
+      `}>
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
           <button
-            onClick={() => setActiveTab("students")}
-            className={`flex-1 py-3 text-xs font-bold rounded-lg transition text-center ${
-              activeTab === "students"
-                ? "bg-blue-600 text-white shadow"
-                : "text-gray-600 hover:bg-gray-100"
-            }`}
+            onClick={startNewChat}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 px-3 rounded-xl transition shadow cursor-pointer flex items-center justify-center gap-2"
           >
-            👨‍🎓 Registered Student
+            ➕ New Chat Session
           </button>
-
-          <button
-            onClick={() => setActiveTab("upload")}
-            className={`flex-1 py-3 text-xs font-bold rounded-lg transition text-center ${
-              activeTab === "upload"
-                ? "bg-blue-600 text-white shadow"
-                : "text-gray-600 hover:bg-gray-100"
-            }`}
+          <button 
+            onClick={() => setIsSidebarOpen(false)}
+            className="md:hidden ml-2 text-slate-400 hover:text-white p-1 font-bold text-lg"
           >
-            📚 Upload Biology Book
-          </button>
-
-          <button
-            onClick={() => setActiveTab("teacher")}
-            className={`flex-1 py-3 text-xs font-bold rounded-lg transition text-center ${
-              activeTab === "teacher"
-                ? "bg-blue-600 text-white shadow"
-                : "text-gray-600 hover:bg-gray-100"
-            }`}
-          >
-            👨‍🏫 Use AI Teacher
+            ✕
           </button>
         </div>
 
-        {/* TAB 1: Registered Student Form */}
-        {activeTab === "students" && (
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-            <h2 className="text-sm font-bold text-gray-800 mb-4 border-b pb-2">
-              👨‍🎓 Register New Student
-            </h2>
-            <form onSubmit={handleCreateStudent} className="space-y-4 max-w-lg mx-auto">
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1">
-                  Roll Number
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. USWA-2026-001"
-                  value={rollNumber}
-                  onChange={(e) => setRollNumber(e.target.value)}
-                  className="w-full p-2.5 text-xs border rounded-lg bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1">
-                  Student Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Muhammad Ali"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full p-2.5 text-xs border rounded-lg bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1">
-                  Password
-                </label>
-                <input
-                  type="text"
-                  placeholder="Enter password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full p-2.5 text-xs border rounded-lg bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={loadingStudent}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-3 rounded-xl transition shadow"
-              >
-                {loadingStudent ? "Saving Student..." : "Save Student"}
-              </button>
-
-              {studentMsg && (
-                <p className="text-xs text-center font-semibold mt-2">{studentMsg}</p>
-              )}
-            </form>
+        <div className="flex-1 p-3 space-y-2 overflow-y-auto text-xs">
+          <div className="text-slate-400 font-semibold mb-2 px-2 text-[11px] uppercase tracking-wider">
+            Your Previous Lectures
           </div>
-        )}
-
-        {/* TAB 2: Upload Complete Word Book Form */}
-        {activeTab === "upload" && (
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-            <h2 className="text-sm font-bold text-gray-800 mb-4 border-b pb-2">
-              📚 Upload Biology Textbook (.docx)
-            </h2>
-            <form onSubmit={handleUploadBook} className="space-y-4 max-w-lg mx-auto">
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1">
-                  Subject
-                </label>
-                <select
-                  value={subject}
-                  onChange={(e) => setSubject(e.target.value)}
-                  className="w-full p-2.5 text-xs border rounded-lg bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="Biology">Biology (بائیالوجی)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1">
-                  Class / Grade Level
-                </label>
-                <select
-                  value={grade}
-                  onChange={(e) => setGrade(e.target.value)}
-                  className="w-full p-2.5 text-xs border rounded-lg bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="11th">11th Grade (First Year)</option>
-                  <option value="12th">12th Grade (Second Year)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1">
-                  Book Title / Chapter Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Biology First Year Official Textbook"
-                  value={chapter}
-                  onChange={(e) => setChapter(e.target.value)}
-                  className="w-full p-2.5 text-xs border rounded-lg bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1">
-                  Word Document File (.docx / .doc)
-                </label>
-                <input
-                  type="file"
-                  accept=".docx,.doc"
-                  onChange={(e) => setFile(e.target.files?.[0] || null)}
-                  className="w-full text-xs p-2 border rounded-lg bg-gray-50"
-                  required
-                />
-              </div>
-
+          {sessions.length === 0 ? (
+            <div className="text-slate-500 italic px-2 text-[11px]">No saved chats yet.</div>
+          ) : (
+            sessions.map((session) => (
               <button
-                type="submit"
-                disabled={loadingBook}
-                className="w-full bg-green-600 hover:bg-green-700 text-white font-bold text-xs py-3 rounded-xl transition shadow"
+                key={session.id}
+                onClick={() => loadSession(session)}
+                className={`w-full text-left p-2.5 rounded-lg text-xs truncate transition cursor-pointer flex items-center justify-between ${
+                  currentSessionId === session.id
+                    ? "bg-slate-800 text-blue-400 font-semibold border border-slate-700"
+                    : "text-slate-300 hover:bg-slate-800/60"
+                }`}
               >
-                {loadingBook ? "Processing and saving book..." : "Upload Book"}
+                <span className="truncate">💬 {session.title}</span>
               </button>
+            ))
+          )}
+        </div>
 
-              {uploadMsg && (
-                <p className="text-xs text-center font-semibold mt-2">{uploadMsg}</p>
-              )}
-            </form>
-          </div>
-        )}
+        <div className="p-4 border-t border-slate-800 text-[10px] text-slate-500 text-center">
+          Uswa College Bhowana | SM Tech AI
+        </div>
+      </aside>
 
-        {/* TAB 3: Use Teacher Link */}
-        {activeTab === "teacher" && (
-          <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 text-center space-y-4">
-            <div className="text-4xl">👨‍🏫</div>
-            <h2 className="text-base font-bold text-gray-800">Use AI Biology Teacher Dashboard</h2>
-            <p className="text-xs text-gray-500 max-w-md mx-auto leading-relaxed">
-              Navigate directly to the AI Biology Teacher dashboard to ask questions and test responses for Uswa College students.
-            </p>
-            <div className="pt-2">
-              <Link
-                href="/dashboard"
-                className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-3 px-8 rounded-xl transition shadow"
-              >
-                Go to AI Teacher Dashboard ➔
-              </Link>
+      {/* MAIN CONTENT AREA */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden w-full bg-slate-50">
+        {/* TOP HEADER */}
+        <header className="bg-white border-b border-slate-200 px-4 md:px-6 py-3.5 flex items-center justify-between gap-2 shadow-xs shrink-0 z-10">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsSidebarOpen(true)}
+              className="md:hidden p-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition font-bold"
+            >
+              ☰
+            </button>
+            
+            <div className="flex items-center gap-3">
+              <Image 
+                src="/logo.jpeg" 
+                alt="Uswa College Logo" 
+                width={36} 
+                height={36} 
+                className="rounded-full object-cover border border-slate-200 shadow-xs" 
+              />
+              <div className="flex flex-col text-left">
+                <h1 className="text-sm md:text-base font-bold text-slate-800 truncate">
+                  Uswa College Bhowana
+                </h1>
+                <p className="text-[10px] md:text-[11px] text-slate-500 font-medium">
+                  AI Biology Learning Portal
+                </p>
+              </div>
             </div>
           </div>
-        )}
+
+          <div className="flex items-center gap-2 md:gap-3">
+            <div className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1.5 rounded-xl border border-slate-200">
+              <span className="text-xs font-semibold text-slate-600 hidden sm:inline">📚 Class:</span>
+              <select
+                value={selectedSubject}
+                onChange={(e) => setSelectedSubject(e.target.value)}
+                className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer max-w-sm sm:max-w-none"
+              >
+                <option value="Biology">Biology (General)</option>
+                <option value="11th Biology">11th Grade (First Year)</option>
+                <option value="12th Biology">12th Grade (Second Year)</option>
+              </select>
+            </div>
+
+            <button
+              onClick={handleLogout}
+              className="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-bold text-xs px-2.5 py-2 rounded-xl transition flex items-center gap-1 cursor-pointer"
+            >
+              🚪 <span className="hidden sm:inline">Logout</span>
+            </button>
+          </div>
+        </header>
+
+        {/* CHAT MESSAGES AREA */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 bg-slate-100/70">
+          {messages.map((msg, index) => (
+            <div
+              key={index}
+              className={`flex flex-col ${
+                msg.role === "user" ? "items-end" : "items-start"
+              }`}
+            >
+              <div
+                className={`max-w-[95%] md:max-w-[80%] rounded-2xl p-4 md:p-5 text-sm shadow-sm ${
+                  msg.role === "user"
+                    ? "bg-blue-600 text-white rounded-br-none font-normal text-left"
+                    : "bg-white border border-slate-200 text-slate-900 rounded-bl-none text-left"
+                }`}
+              >
+                {/* اگر یوزر نے تصویر بھیجی ہو تو وہ شو کریں */}
+                {msg.imageUrl && (
+                  <div className="mb-3">
+                    <img 
+                      src={msg.imageUrl} 
+                      alt="Uploaded paper" 
+                      className="max-h-48 rounded-lg border border-white/20 object-contain" 
+                    />
+                  </div>
+                )}
+
+                {msg.role === "assistant" ? (
+                  <div className="space-y-2.5 font-sans leading-relaxed text-slate-800 text-left">
+                    {msg.text.split("\n").map((line, lineIdx) => {
+                      const trimmed = line.trim();
+                      if (!trimmed) return null;
+
+                      const isHeading = trimmed.startsWith("**") || trimmed.startsWith("1.") || trimmed.startsWith("-") || trimmed.endsWith(":");
+
+                      return (
+                        <div
+                          key={lineIdx}
+                          className={`${
+                            isHeading
+                              ? "font-bold text-blue-900 text-sm md:text-base mt-3 border-l-4 border-blue-600 pl-3 bg-blue-50/50 py-1 rounded-r-lg text-left"
+                              : "text-slate-700 text-xs md:text-sm pl-1 text-left"
+                          }`}
+                        >
+                          {trimmed.replace(/\*\*/g, "")}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="whitespace-pre-wrap leading-relaxed font-sans text-left text-xs md:text-sm">
+                    {msg.text}
+                  </div>
+                )}
+
+                {msg.translatedText && (
+                  <div className="mt-4 pt-4 border-t border-blue-200 bg-blue-50/90 p-3 md:p-4 rounded-xl text-slate-900 font-medium text-sm leading-loose shadow-inner" dir="rtl">
+                    <span className="text-blue-700 font-bold block mb-2 text-xs tracking-wide text-left" dir="ltr">🌐 Urdu Translation:</span>
+                    <div className="font-urdu text-right text-slate-800 text-xs md:text-sm" style={{ fontFamily: "Jameel Noori Nastaleeq, Noto Nastaliq Urdu, sans-serif" }}>
+                      {msg.translatedText}
+                    </div>
+                  </div>
+                )}
+
+                {msg.role === "assistant" && (
+                  <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-start gap-4 text-xs">
+                    <button
+                      onClick={() => speakText(msg.text, index)}
+                      className="flex items-center gap-1 text-blue-600 font-bold hover:underline cursor-pointer"
+                    >
+                      {isSpeaking === index ? "⏹️ Stop" : "🔊 Listen"}
+                    </button>
+
+                    <button
+                      onClick={() => handleToggleTranslateMessage(index)}
+                      disabled={msg.isTranslating}
+                      className="flex items-center gap-1 text-emerald-600 hover:text-emerald-700 font-bold cursor-pointer transition bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200"
+                    >
+                      🌐 {msg.isTranslating ? "Translating..." : msg.translatedText ? "Hide Urdu" : "Show Urdu"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {loading && (
+            <div className="flex justify-start">
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 text-xs font-semibold text-slate-500 animate-pulse shadow-xs">
+                AI Biology Professor is evaluating...
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* CHAT INPUT AREA (Sticky & Fully Visible on Mobile) */}
+        <div className="bg-white border-t border-slate-300 p-3 md:p-4 shrink-0 shadow-md z-20">
+          {/* اگر کوئی امیج سلیکٹ ہو تو اس کا پریویو یہاں دکھائیں */}
+          {selectedImage && (
+            <div className="max-w-4xl mx-auto mb-2 flex items-center gap-2 bg-slate-100 p-2 rounded-xl border border-slate-200">
+              <img src={selectedImage} alt="Preview" className="h-12 w-12 object-cover rounded-lg border" />
+              <div className="flex-1 text-xs text-slate-700 font-medium truncate">Image attached for evaluation</div>
+              <button 
+                type="button" 
+                onClick={() => setSelectedImage(null)} 
+                className="text-red-600 font-bold px-2 py-1 hover:bg-red-50 rounded-lg text-xs"
+              >
+                ✕ Remove
+              </button>
+            </div>
+          )}
+
+          <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex items-center gap-2">
+            {/* اٹیچمنٹ (فائل / امیج) بٹن */}
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleImageChange} 
+              accept="image/*" 
+              className="hidden" 
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="p-2.5 md:p-3 rounded-xl border font-bold text-sm transition flex items-center justify-center cursor-pointer shrink-0 bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
+              title="Attach Paper Image or Document"
+            >
+              📎
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleListening}
+              className={`p-2.5 md:p-3 rounded-xl border font-bold text-sm transition flex items-center justify-center cursor-pointer shrink-0 ${
+                isListening
+                  ? "bg-red-600 text-white animate-bounce border-red-600 shadow-sm"
+                  : "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
+              }`}
+              title="Voice Input"
+            >
+              {isListening ? "🔴" : "🎙️"}
+            </button>
+
+            <input
+              type="text"
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+              placeholder="Type your question, attach paper, or click mic..."
+              className="flex-1 bg-slate-100 border border-slate-300 rounded-xl px-3 md:px-4 py-2.5 md:py-3 text-xs md:text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition text-left"
+            />
+
+            <button
+              type="submit"
+              disabled={loading || (!inputMessage.trim() && !selectedImage)}
+              className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-xs px-4 md:px-6 py-2.5 md:py-3 rounded-xl transition shadow-xs cursor-pointer shrink-0"
+            >
+              Send
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );

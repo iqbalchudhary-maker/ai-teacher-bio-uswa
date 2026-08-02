@@ -10,6 +10,11 @@ interface Message {
   text: string;
   translatedText?: string;
   isTranslating?: boolean;
+  attachment?: {
+    name: string;
+    url: string;
+    type: string;
+  };
 }
 
 interface ChatSession {
@@ -39,6 +44,10 @@ export default function StudentDashboard() {
   ]);
   const [inputMessage, setInputMessage] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // File Attachment State
+  const [attachedFile, setAttachedFile] = useState<{ name: string; url: string; type: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState<number | null>(null);
@@ -108,6 +117,19 @@ export default function StudentDashboard() {
         text: `Welcome! I am your AI Biology Professor for ${selectedSubject}. Which chapter or topic would you like to start today?`,
       },
     ]);
+  };
+
+  // Handle File Upload Selection
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const fileUrl = URL.createObjectURL(file);
+      setAttachedFile({
+        name: file.name,
+        url: fileUrl,
+        type: file.type,
+      });
+    }
   };
 
   // Speech Recognition Setup
@@ -181,8 +203,9 @@ export default function StudentDashboard() {
       return;
     }
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    const hasUrdu = /[\u0600-\u06FF]/.test(text);
+    const cleanText = text.replace(/<[^>]*>?/gm, ''); 
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    const hasUrdu = /[\u0600-\u06FF]/.test(cleanText);
     utterance.lang = hasUrdu ? "ur-PK" : "en-US";
 
     utterance.onend = () => setIsSpeaking(null);
@@ -214,7 +237,7 @@ export default function StudentDashboard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message: targetMsg.text,
+          message: targetMsg.text.replace(/<[^>]*>?/gm, ''),
           action: "translate_to_urdu",
         }),
       });
@@ -246,15 +269,20 @@ export default function StudentDashboard() {
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!inputMessage.trim() || loading) return;
+    if ((!inputMessage.trim() && !attachedFile) || loading) return;
 
     const userText = inputMessage;
+    const currentAttachment = attachedFile;
     const isVoiceInputTurn = wasVoiceInput;
 
     setInputMessage("");
+    setAttachedFile(null);
     setWasVoiceInput(false);
 
-    const newMessages: Message[] = [...messages, { role: "user", text: userText }];
+    const newMessages: Message[] = [
+      ...messages, 
+      { role: "user", text: userText, attachment: currentAttachment || undefined }
+    ];
     setMessages(newMessages);
     setLoading(true);
 
@@ -267,6 +295,7 @@ export default function StudentDashboard() {
           subject: selectedSubject,
           sessionId: currentSessionId,
           studentId: studentId,
+          attachmentName: currentAttachment?.name || null,
         }),
       });
 
@@ -276,7 +305,7 @@ export default function StudentDashboard() {
         if (data.sessionId && !currentSessionId) {
           setCurrentSessionId(data.sessionId);
           setSessions((prev) => [
-            { id: data.sessionId, title: userText, createdAt: new Date().toLocaleDateString() },
+            { id: data.sessionId, title: userText || currentAttachment?.name || "Attachment Chat", createdAt: new Date().toLocaleDateString() },
             ...prev,
           ]);
         }
@@ -312,7 +341,7 @@ export default function StudentDashboard() {
       {isSidebarOpen && (
         <div 
           onClick={() => setIsSidebarOpen(false)}
-          className="fixed inset-0 bg-black/60 z-30 md:hidden backdrop-blur-sm"
+          className="fixed inset-0 bg-black/60 z-30 md:hidden backdrop-blur-sm transition-opacity"
         />
       )}
 
@@ -425,19 +454,32 @@ export default function StudentDashboard() {
           {messages.map((msg, index) => (
             <div
               key={index}
-              className={`flex flex-col ${
+              className={`flex flex-col animate-fadeIn ${
                 msg.role === "user" ? "items-end" : "items-start"
               }`}
             >
               <div
-                className={`max-w-[95%] md:max-w-[80%] rounded-2xl p-4 md:p-5 text-sm shadow-sm ${
+                className={`max-w-[95%] md:max-w-[80%] rounded-2xl p-4 md:p-5 text-sm shadow-sm transition-all duration-300 ${
                   msg.role === "user"
                     ? "bg-blue-600 text-white rounded-br-none font-normal text-left"
                     : "bg-white border border-slate-200 text-slate-900 rounded-bl-none text-left"
                 }`}
               >
+                {/* User Attachment Display */}
+                {msg.attachment && (
+                  <div className="mb-3 p-2 bg-white/10 rounded-lg flex items-center gap-2 border border-white/20">
+                    {msg.attachment.type.startsWith("image/") ? (
+                      <img src={msg.attachment.url} alt="Attachment" className="w-16 h-16 object-cover rounded-md" />
+                    ) : (
+                      <span className="text-2xl">📄</span>
+                    )}
+                    <span className="text-xs truncate font-medium">{msg.attachment.name}</span>
+                  </div>
+                )}
+
                 {msg.role === "assistant" ? (
                   <div className="space-y-2.5 font-sans leading-relaxed text-slate-800 text-left">
+                    {/* Render message text lines cleanly without any pictures */}
                     {msg.text.split("\n").map((line, lineIdx) => {
                       const trimmed = line.trim();
                       if (!trimmed) return null;
@@ -449,12 +491,13 @@ export default function StudentDashboard() {
                           key={lineIdx}
                           className={`${
                             isHeading
-                              ? "font-bold text-blue-900 text-sm md:text-base mt-3 border-l-4 border-blue-600 pl-3 bg-blue-50/50 py-1 rounded-r-lg text-left"
+                              ? "font-bold text-blue-900 text-sm md:text-base mt-3 border-l-4 border-blue-600 pl-3 bg-blue-50/50 py-1 rounded-r-lg text-left transition-all duration-300"
                               : "text-slate-700 text-xs md:text-sm pl-1 text-left"
                           }`}
-                        >
-                          {trimmed.replace(/\*\*/g, "")}
-                        </div>
+                          dangerouslySetInnerHTML={{
+                            __html: trimmed.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                          }}
+                        />
                       );
                     })}
                   </div>
@@ -465,7 +508,7 @@ export default function StudentDashboard() {
                 )}
 
                 {msg.translatedText && (
-                  <div className="mt-4 pt-4 border-t border-blue-200 bg-blue-50/90 p-3 md:p-4 rounded-xl text-slate-900 font-medium text-sm leading-loose shadow-inner" dir="rtl">
+                  <div className="mt-4 pt-4 border-t border-blue-200 bg-blue-50/90 p-3 md:p-4 rounded-xl text-slate-900 font-medium text-sm leading-loose shadow-inner animate-fadeIn" dir="rtl">
                     <span className="text-blue-700 font-bold block mb-2 text-xs tracking-wide text-left" dir="ltr">🌐 Urdu Translation:</span>
                     <div className="font-urdu text-right text-slate-800 text-xs md:text-sm" style={{ fontFamily: "Jameel Noori Nastaleeq, Noto Nastaliq Urdu, sans-serif" }}>
                       {msg.translatedText}
@@ -477,7 +520,7 @@ export default function StudentDashboard() {
                   <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-start gap-4 text-xs">
                     <button
                       onClick={() => speakText(msg.text, index)}
-                      className="flex items-center gap-1 text-blue-600 font-bold hover:underline cursor-pointer"
+                      className="flex items-center gap-1 text-blue-600 font-bold hover:underline cursor-pointer transition-transform active:scale-95"
                     >
                       {isSpeaking === index ? "⏹️ Stop" : "🔊 Listen"}
                     </button>
@@ -485,7 +528,7 @@ export default function StudentDashboard() {
                     <button
                       onClick={() => handleToggleTranslateMessage(index)}
                       disabled={msg.isTranslating}
-                      className="flex items-center gap-1 text-emerald-600 hover:text-emerald-700 font-bold cursor-pointer transition bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200"
+                      className="flex items-center gap-1 text-emerald-600 hover:text-emerald-700 font-bold cursor-pointer transition bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 active:scale-95"
                     >
                       🌐 {msg.isTranslating ? "Translating..." : msg.translatedText ? "Hide Urdu" : "Show Urdu"}
                     </button>
@@ -496,21 +539,54 @@ export default function StudentDashboard() {
           ))}
 
           {loading && (
-            <div className="flex justify-start">
-              <div className="bg-white border border-slate-200 rounded-2xl p-4 text-xs font-semibold text-slate-500 animate-pulse shadow-xs">
+            <div className="flex justify-start animate-fadeIn">
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 text-xs font-semibold text-slate-500 animate-pulse shadow-xs flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-blue-600 animate-ping"></span>
                 AI Biology Professor is generating lecture...
               </div>
             </div>
           )}
         </div>
 
-        {/* CHAT INPUT AREA (Sticky & Fully Visible on Mobile) */}
+        {/* CHAT INPUT AREA */}
         <div className="bg-white border-t border-slate-300 p-3 md:p-4 shrink-0 shadow-md z-20">
+          {attachedFile && (
+            <div className="max-w-4xl mx-auto mb-2 p-2 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between text-xs animate-fadeIn">
+              <div className="flex items-center gap-2 truncate">
+                <span className="text-base">📎</span>
+                <span className="font-bold text-blue-900 truncate">{attachedFile.name}</span>
+              </div>
+              <button 
+                onClick={() => setAttachedFile(null)} 
+                className="text-red-500 font-bold px-2 py-0.5 hover:bg-red-100 rounded-md transition"
+              >
+                ✕ Remove
+              </button>
+            </div>
+          )}
+
           <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex items-center gap-2">
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleFileChange} 
+              className="hidden" 
+              accept="image/*,.pdf,.doc,.docx,.txt"
+            />
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="p-2.5 md:p-3 rounded-xl border bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300 font-bold text-sm transition transform active:scale-95 flex items-center justify-center cursor-pointer shrink-0"
+              title="Upload Image or Document"
+            >
+              📎
+            </button>
+
             <button
               type="button"
               onClick={toggleListening}
-              className={`p-2.5 md:p-3 rounded-xl border font-bold text-sm transition flex items-center justify-center cursor-pointer shrink-0 ${
+              className={`p-2.5 md:p-3 rounded-xl border font-bold text-sm transition transform active:scale-95 flex items-center justify-center cursor-pointer shrink-0 ${
                 isListening
                   ? "bg-red-600 text-white animate-bounce border-red-600 shadow-sm"
                   : "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
@@ -524,14 +600,14 @@ export default function StudentDashboard() {
               type="text"
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
-              placeholder="Type your question or click mic..."
+              placeholder="Type your question or attach file..."
               className="flex-1 bg-slate-100 border border-slate-300 rounded-xl px-3 md:px-4 py-2.5 md:py-3 text-xs md:text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition text-left"
             />
 
             <button
               type="submit"
-              disabled={loading || !inputMessage.trim()}
-              className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-xs px-4 md:px-6 py-2.5 md:py-3 rounded-xl transition shadow-xs cursor-pointer shrink-0"
+              disabled={loading || (!inputMessage.trim() && !attachedFile)}
+              className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-xs px-4 md:px-6 py-2.5 md:py-3 rounded-xl transition transform active:scale-95 shadow-xs cursor-pointer shrink-0"
             >
               Send
             </button>
