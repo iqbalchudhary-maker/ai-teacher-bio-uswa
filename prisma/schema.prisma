@@ -1,0 +1,57 @@
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+model Admin {
+  id       String @id @default(cuid())
+  username String @unique
+  password String
+}
+
+model Student {
+  id         String   @id @default(cuid())
+  rollNumber String   @unique
+  password   String
+  name       String
+  chats      Chat[]
+  createdAt  DateTime @default(now())
+}
+
+model Chat {
+  id        String    @id @default(cuid())
+  title     String    @default("New Session")
+  subject   String?
+  chapter   String?
+  studentId String
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  messages  Message[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  chatId    String
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  role      String   // "user" | "assistant"
+  content   String   @db.Text
+  imageUrl  String?  // Paper/Test Checking Image
+  createdAt DateTime @default(now())
+}
+
+model Book {
+  id        String   @id @default(cuid())
+  title     String
+  subject   String?
+  grade     String   // "11th" یا "12th" (First Year یا Second Year کے لیے)
+  content   String   @db.Text   // بڑی کتب کا ٹیکسٹ محفوظ کرنے کے لیے Text ٹائپ
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
