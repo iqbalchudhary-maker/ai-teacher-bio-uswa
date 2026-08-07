@@ -338,10 +338,8 @@ export default function StudentDashboard() {
     if (!editText.trim()) return;
     
     const truncatedMessages = messages.slice(0, index);
-    setMessages(truncatedMessages);
     setEditingIndex(null);
-    setEditingIndex(null);
-    setInputMessage(editText);
+    setInputMessage("");
     setEditText("");
 
     const userText = editText;
@@ -388,7 +386,6 @@ export default function StudentDashboard() {
     router.push("/login");
   };
 
-  // Show loading state while checking authentication to prevent redirect loops
   if (!isAuthenticated) {
     return (
       <div className="flex h-dvh w-screen items-center justify-center bg-slate-100 text-slate-700 font-bold text-sm">
@@ -446,7 +443,7 @@ export default function StudentDashboard() {
           {sessions.length === 0 ? (
             <div className="text-slate-500 italic px-2 text-[11px]">No saved chats yet.</div>
           ) : (
-            sessions.map((session: any, index: number) => (
+            sessions.map((session: ChatSession, index: number) => (
               <button
                 key={`${session.id}-${index}`}
                 onClick={() => loadSession(session)}
